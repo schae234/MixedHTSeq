@@ -27,6 +27,7 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
             if read is not None:
                 samoutfile.write( read.original_sam_line.rstrip() + 
                     "\tXF:Z:" + assignment + "\n" )
+        
 
     if samout != "":
         samoutfile = open( samout, "w" )
@@ -34,15 +35,16 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
         samoutfile = None
         
     # Keep track of what features we see and
+    # handle the overlapping features business with ArrayOfSets
+    features = HTSeq.GenomicArrayOfSets( "auto", stranded == "yes" )      
     # also the counts from those features
-    features = HTSeq.GenomicArrayOfSets( "auto", stranded != "no" )      
     counts = {}
 
     # Try to open samfile to fail early in case it is not there
     if sam_filename != "-":
         open( sam_filename ).close()
       
-    # OPen and read the GFF file (features) 
+    # Open and read the GFF file (features) 
     gff = HTSeq.GFF_Reader( gff_filename )    
     i = 0
     try:
@@ -99,15 +101,13 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
         raise
 
     try:
-        # Do a mixture of paired and single end reads
-        read_seq = HTSeq.mixed_SAM_alignments_with_buffer( read_seq )
-       
-        # Successful Counts
-        paired_end = 0
-        single_end = 0
-        collapsed = 0
-        collapsed_trimmed = 0
-         
+        #if pe_mode:
+            #if order == "name":
+            #    read_seq = HTSeq.pair_SAM_alignments( read_seq )
+            #elif order == "pos":
+        read_seq = HTSeq.pair_SAM_alignments_with_buffer( read_seq )
+            #else:
+            #    raise ValueError, "Illegal order specified."
         empty = 0
         ambiguous = 0
         notaligned = 0
@@ -115,17 +115,12 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
         nonunique = 0
         i = 0    
         for r in read_seq:
-            i += 1 # This handles reporting at read 0
-            if i % 100000 == 0 and not quiet:
-                sys.stderr.write( "%d SAM alignment records processed.\n" % ( i,) )
+            if i > 0 and i % 100000 == 0 and not quiet:
+                sys.stderr.write( "%d SAM alignment record%s processed.\n" % ( i, "s" if not pe_mode else " pairs" ) )
 
-            # Figure out if single or paired end
-            
-            # SINGLE END
-            if len(r) == 1:
-                # Reset r for convenience
+            i += 1
+            if not r[0].paired_end:
                 r = r[0]
-                # do some QC
                 if not r.aligned:
                     notaligned += 1
                     write_to_samout( r, "__not_aligned" )
@@ -142,18 +137,10 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
                     write_to_samout( r, "__too_low_aQual" )
                     continue
                 if stranded != "reverse":
-                    # Get the reference intervals for matching cigar sites. 
                     iv_seq = ( co.ref_iv for co in r.cigar if co.type == "M" and co.size > 0 )
                 else:
                     iv_seq = ( invert_strand( co.ref_iv ) for co in r.cigar if co.type == "M" and co.size > 0 )                
-                if r.read.name.startswith('M_'):
-                    collapsed += 1
-                elif r.read.name.startswith('MT_'):
-                    collapsed_trimmed += 1
-                else:
-                    single_end += 1
-            # PAIRED END!
-            elif len(r) == 2:
+            else:
                 if r[0] is not None and r[0].aligned:
                     if stranded != "reverse":
                         iv_seq = ( co.ref_iv for co in r[0].cigar if co.type == "M" and co.size > 0 )
@@ -185,10 +172,7 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
                     lowqual += 1
                     write_to_samout( r, "__too_low_aQual" )
                     continue            
-                paired_end += 1
-            else:
-                raise ValueError('%s not single or paired' % str(r))
-
+            
             try:
                 if overlap_mode == "union":
                     fs = set()
@@ -228,7 +212,7 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
         raise
 
     if not quiet:
-        sys.stderr.write( "%d SAM alignments processed.\n" % ( i,) )
+        sys.stderr.write( "%d SAM %s processed.\n" % ( i, "alignments " if not pe_mode else "alignment pairs" ) )
             
     if samoutfile is not None:
         samoutfile.close()
@@ -240,11 +224,6 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
     print "__too_low_aQual\t%d" % lowqual
     print "__not_aligned\t%d" % notaligned
     print "__alignment_not_unique\t%d" % nonunique
-
-    print "__paired_end\t%d" % paired_end
-    print "__single_end\t%d" % single_end
-    print "__collapsed\t%d" % collapsed
-    print "__collapsed_trimmed\t%d" % collapsed_trimmed
 
         
 def main():
@@ -275,9 +254,9 @@ def main():
           "must be specified. Ignored for single-end data." )
 
     optParser.add_option( "-s", "--stranded", type="choice", dest="stranded",
-      choices = ( "yes", "no", "reverse" ), default = "yes",
+      choices = ( "yes", "no", "reverse" ), default = "no",
       help = "whether the data is from a strand-specific assay. Specify 'yes', " +
-          "'no', or 'reverse' (default: yes). " +
+          "'no', or 'reverse' (default: no). " +
           "'reverse' means 'yes' with reversed strand interpretation" )
         
     optParser.add_option( "-a", "--minaqual", type="int", dest="minaqual",
@@ -335,5 +314,9 @@ def my_showwarning( message, category, filename, lineno = None, line = None ):
     sys.stderr.write( "Warning: %s\n" % message )
 
 if __name__ == "__main__":
+    import sys
+    from IPython.core import ultratb
+    sys.excepthook = ultratb.FormattedTB(mode='Verbose',
+         color_scheme='Linux', call_pdb=1)
     main()
 
