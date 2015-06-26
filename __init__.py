@@ -206,6 +206,8 @@ class GFF_Reader( FileOrSequence ):
             ( seqname, source, feature, start, end, score, 
                 strand, frame, attributeStr ) = line.split( "\t", 8 )    
             ( attr, name ) = parse_GFF_attribute_string( attributeStr, True )
+            if feature == 'chromosome':
+                start = 1
             if self.end_included:
                 iv = GenomicInterval( seqname, int(start)-1, int(end), strand )
             else:
