@@ -1,6 +1,8 @@
+from __future__ import print_function
 import sys, optparse, itertools, warnings, traceback, os.path
 
 import HTSeq
+import re
 
 class UnknownChrom( Exception ):
     pass
@@ -16,27 +18,15 @@ def invert_strand( iv ):
     return iv2
 
 def count_reads_in_features( sam_filename, gff_filename, samtype, order, stranded, 
-        overlap_mode, feature_type, id_attribute, quiet, minaqual, samout ):
+        overlap_mode, feature_type, id_attribute, quiet, minaqual, out, 
+        file_regex, sample_col, debug ):
         
-    def write_to_samout( r, assignment ):
-        if samoutfile is None:
-            return
-        if not pe_mode:
-            r = (r,)
-        for read in r:
-            if read is not None:
-                samoutfile.write( read.original_sam_line.rstrip() + 
-                    "\tXF:Z:" + assignment + "\n" )
 
-    if samout != "":
-        samoutfile = open( samout, "w" )
-    else:
-        samoutfile = None
-        
     # Keep track of what features we see and
     # also the counts from those features
     features = HTSeq.GenomicArrayOfSets( "auto", stranded != "no" )      
     counts = {}
+    lens = {}
 
     # Try to open samfile to fail early in case it is not there
     if sam_filename != "-":
@@ -60,6 +50,7 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
                         ( f.name, f.iv ) )
                 features[ f.iv ] += feature_id
                 counts[ f.attr[ id_attribute ] ] = 0
+                lens[f.attr[id_attribute]] = f.iv.length
             i += 1
             # progress report
             if i % 100000 == 0 and not quiet:
@@ -107,6 +98,9 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
         single_end = 0
         collapsed = 0
         collapsed_trimmed = 0
+
+        # Total counts for FPKM
+        total_counts = 0
          
         empty = 0
         ambiguous = 0
@@ -118,7 +112,8 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
             i += 1 # This handles reporting at read 0
             if i % 100000 == 0 and not quiet:
                 sys.stderr.write( "%d SAM alignment records processed.\n" % ( i,) )
-
+                if debug:
+                    break 
             # Figure out if single or paired end
             
             # SINGLE END
@@ -128,18 +123,15 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
                 # do some QC
                 if not r.aligned:
                     notaligned += 1
-                    write_to_samout( r, "__not_aligned" )
                     continue
                 try:
                     if r.optional_field( "NH" ) > 1:
                         nonunique += 1
-                        write_to_samout( r, "__alignment_not_unique" )
                         continue
                 except KeyError:
                     pass
                 if r.aQual < minaqual:
                     lowqual += 1
-                    write_to_samout( r, "__too_low_aQual" )
                     continue
                 if stranded != "reverse":
                     # Get the reference intervals for matching cigar sites. 
@@ -170,20 +162,17 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
                             ( co.ref_iv for co in r[1].cigar if co.type == "M" and co.size > 0 ) )
                 else:
                     if ( r[0] is None ) or not ( r[0].aligned ):
-                        write_to_samout( r, "__not_aligned" )
                         notaligned += 1
                         continue            
                 try:
                     if ( r[0] is not None and r[0].optional_field( "NH" ) > 1 ) or \
                             ( r[1] is not None and r[1].optional_field( "NH" ) > 1 ):
                         nonunique += 1
-                        write_to_samout( r, "__alignment_not_unique" )
                         continue
                 except KeyError:
                     pass
                 if ( r[0] and r[0].aQual < minaqual ) or ( r[1] and r[1].aQual < minaqual ):
                     lowqual += 1
-                    write_to_samout( r, "__too_low_aQual" )
                     continue            
                 paired_end += 1
             else:
@@ -211,16 +200,13 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
                 else:
                     sys.exit( "Illegal overlap mode." )
                 if fs is None or len( fs ) == 0:
-                    write_to_samout( r, "__no_feature" )
                     empty += 1
                 elif len( fs ) > 1:
-                    write_to_samout( r, "__ambiguous[" + '+'.join( fs ) + "]" )
                     ambiguous += 1
                 else:
-                    write_to_samout( r, list(fs)[0] )
+                    total_counts += 1
                     counts[ list(fs)[0] ] += 1
             except UnknownChrom:
-                write_to_samout( r, "__no_feature" )
                 empty += 1
 
     except:
@@ -230,21 +216,39 @@ def count_reads_in_features( sam_filename, gff_filename, samtype, order, strande
     if not quiet:
         sys.stderr.write( "%d SAM alignments processed.\n" % ( i,) )
             
-    if samoutfile is not None:
-        samoutfile.close()
 
-    for fn in sorted( counts.keys() ):
-        print "%s\t%d" % ( fn, counts[fn] )
-    print "__no_feature\t%d" % empty
-    print "__ambiguous\t%d" % ambiguous
-    print "__too_low_aQual\t%d" % lowqual
-    print "__not_aligned\t%d" % notaligned
-    print "__alignment_not_unique\t%d" % nonunique
+    if out == '-': 
+        out = open('{}_{}.counts'.format(sam_filename,gff_filename),'w')
+    else:
+        out = sys.stdout
 
-    print "__paired_end\t%d" % paired_end
-    print "__single_end\t%d" % single_end
-    print "__collapsed\t%d" % collapsed
-    print "__collapsed_trimmed\t%d" % collapsed_trimmed
+    if file_regex != '':
+        sample_col = re.match(file_regex,sam_filename).group(1) 
+    elif sample_col != '':
+        sample_col = sample_col
+    else:
+        sample_col = sam_filename
+
+    # print count info 
+    print("sample\tfeature\tfpkm\treads\tlength\ttotal_reads",file=out)
+    for ftr,cnts in sorted( counts.items() ):
+            # calculate FPKM 
+            fpkm = (cnts * 1e9)/(lens[ftr]*total_counts)
+            print("{}\t{}\t{}\t{}\t{}\t{}".format(sample_col,ftr,fpkm,cnts,lens[ftr],total_counts),file=out)
+            
+
+    # print log info
+    log = open('{}_{}.log'.format(sam_filename,gff_filename),'w')
+    print("no_feature\t{}".format(empty),file=log)
+    print("ambiguous\t{}".format(ambiguous),file=log)
+    print("too_low_aQual\t{}".format(lowqual),file=log)
+    print("not_aligned\t{}".format(notaligned),file=log)
+    print("alignment_not_unique\t{}".format(nonunique),file=log)
+
+    print("paired_end\t{}".format(paired_end),file=log)
+    print("single_end\t{}".format(single_end),file=log)
+    print("collapsed\t{}".format(collapsed),file=log)
+    print("collapsed_trimmed\t{}".format(collapsed_trimmed),file=log)
 
         
 def main():
@@ -280,32 +284,52 @@ def main():
           "'no', or 'reverse' (default: yes). " +
           "'reverse' means 'yes' with reversed strand interpretation" )
         
-    optParser.add_option( "-a", "--minaqual", type="int", dest="minaqual",
+    optParser.add_option( 
+        "-a", "--minaqual", type="int", dest="minaqual",
         default = 10,
         help = "skip all reads with alignment quality lower than the given " +
             "minimum value (default: 10)" )
         
-    optParser.add_option( "-t", "--type", type="string", dest="featuretype",
+    optParser.add_option(
+         "-t", "--type", type="string", dest="featuretype",
         default = "exon", help = "feature type (3rd column in GFF file) to be used, " +
             "all features of other type are ignored (default, suitable for Ensembl " +
             "GTF files: exon)" )
             
-    optParser.add_option( "-i", "--idattr", type="string", dest="idattr",
+    optParser.add_option(
+         "-i", "--idattr", type="string", dest="idattr",
         default = "gene_id", help = "GFF attribute to be used as feature ID (default, " +
         "suitable for Ensembl GTF files: gene_id)" )
 
-    optParser.add_option( "-m", "--mode", type="choice", dest="mode",
+    optParser.add_option( 
+        "-m", "--mode", type="choice", dest="mode",
         choices = ( "union", "intersection-strict", "intersection-nonempty" ), 
         default = "union", help = "mode to handle reads overlapping more than one feature " +
             "(choices: union, intersection-strict, intersection-nonempty; default: union)" )
             
-    optParser.add_option( "-o", "--samout", type="string", dest="samout",
-        default = "", help = "write out all SAM alignment records into an output " +
-        "SAM file called SAMOUT, annotating each line with its feature assignment " +
-        "(as an optional field with tag 'XF')" )
+    optParser.add_option( 
+        "-o", "--out", type="string", dest="out",
+        default="-", help = "Name of the output file for counts. Default is sys.stdout" )
+
+
+    optParser.add_option(
+        '--file-regex', type='string',dest='file_regex',
+        default='',help='match regex performed on bam filename for output column'
+    )
+
+    optParser.add_option(
+        '--sample_col', type='string',dest='sample_col',
+        default='',help='match regex performed on bam filename for output column'
+    )
+
+    optParser.add_option(
+        '--debug', action='store_true',dest='debug',
+        help='debug mode'
+    )
 
     optParser.add_option( "-q", "--quiet", action="store_true", dest="quiet",
-        help = "suppress progress report" ) # and warnings" )
+        help = "suppress progress report"
+    ) 
 
     if len( sys.argv ) == 1:
         optParser.print_help()
@@ -322,7 +346,7 @@ def main():
     try:
         count_reads_in_features( args[0], args[1], opts.samtype, opts.order, opts.stranded, 
             opts.mode, opts.featuretype, opts.idattr, opts.quiet, opts.minaqual,
-            opts.samout )
+            opts.out, opts.file_regex, opts.sample_col, opts.debug)
     except:
         sys.stderr.write( "  %s\n" % str( sys.exc_info()[1] ) )
         sys.stderr.write( "  [Exception type: %s, raised in %s:%d]\n" % 
