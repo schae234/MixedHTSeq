@@ -11,9 +11,8 @@ import argparse
 def main(args):
     pd.concat(
         [pd.read_table(x,sep='\t') for x in args.files]
-    )\
-    .pivot('feature','sample',args.count)\
-    .to_csv(args.out,sep='\t')
+    ).pivot('feature','sample',values=args.count)\
+    .to_csv(args.out,sep='\t',index_label=False)
     return 0
 
 if __name__ == '__main__':
