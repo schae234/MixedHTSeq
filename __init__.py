@@ -136,6 +136,7 @@ class GenomicFeature( object ):
         else:
             sep = " "
         chrom = self.iv.chrom
+		# if the chromosome doesn't start with 'chr', add it
         if not(chrom[:3] == 'chr'):
             chrom = 'chr' + chrom
         attr_str = '; '.join( [ '%s%s%s' % ( ak, sep, attr[ak] ) for ak in attr ] )
