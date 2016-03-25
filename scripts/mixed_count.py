@@ -1,7 +1,7 @@
 from __future__ import print_function
 import sys, optparse, itertools, warnings, traceback, os.path
 
-import HTSeq
+import MixedHTSeq as HTSeq
 import re
 
 class UnknownChrom( Exception ):
