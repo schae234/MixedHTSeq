@@ -1,4 +1,4 @@
-import MixedHTSeq
+import MixedHTSeq as HTSeq
 import itertools
 import numpy
 
