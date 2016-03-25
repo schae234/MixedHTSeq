@@ -641,9 +641,6 @@ def mixed_SAM_alignments_with_buffer( alignments, max_buffer_size=3000000):
     # Iterate over alignments
     for almnt in alignments:
 
-        if len(almnt_buffer) > 1000000:
-            import ipdb; ipdb.set_trace()
-
         if not almnt.paired_end or (almnt.paired_end and not almnt.mate_aligned):
             yield (almnt,)
         else:
