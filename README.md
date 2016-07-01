@@ -4,6 +4,26 @@ By default, HTSeq has a count script for doing either paired ends or single end 
 MixedHTSeq extends this to cover cases where you have a mixture of the two due to 
 QC tools like [AdapterRemoval](http://www.ncbi.nlm.nih.gov/pubmed/22748135). 
 
+Installation
+------------
+MixedHTSeq can be installed using the following commands (on linux machines)
+```
+git clone https://github.com/schae234/MixedHTSeq.git
+cd MixedHTSeq
+pip install numpy pandas 
+python setup.py install
+```
+
+**Note**: MixedHTSeq requires python2.7 and numpy
+
+Usage
+-----
+MixedHTSeq comes with several scripts which are in the `scripts/` directory.
+
+```
+cd scripts/
+python mixed_count.py --help
+```
 
 References
 ----------
